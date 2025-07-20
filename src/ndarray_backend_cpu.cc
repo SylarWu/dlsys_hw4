@@ -32,7 +32,46 @@ struct AlignedArray {
   size_t size;
 };
 
+struct AlignedArrayIndex {
+  AlignedArrayIndex(const std::vector<int32_t>& shape,
+                    const std::vector<int32_t>& strides,
+                    const size_t offset)
+   : shape(shape), strides(strides), offset(offset), indexes(shape.size()), cur_axis(shape.size() - 1), index(offset) {
+    assert(shape.size() == strides.size() && "size of shape is not equal to size of strides");
+  }
+  operator size_t() const {
+    return index;
+  }
+  bool is_end() const {
+    return cur_axis < 0;
+  }
+  void next() {
+    index += strides[cur_axis];
+    ++indexes[cur_axis];
+    if (indexes[cur_axis] >= shape[cur_axis]) {
+      while (indexes[cur_axis] >= shape[cur_axis]) {
+        index -= strides[cur_axis] * shape[cur_axis];
+        indexes[cur_axis] = 0;
+        --cur_axis;
+        if (is_end()) {
+            return;
+        }
+        ++indexes[cur_axis];
+        index += strides[cur_axis];
+      }
+      cur_axis = shape.size() - 1;
+    }
+  }
 
+  private:
+    std::vector<int32_t> shape;
+    std::vector<int32_t> strides;
+    size_t offset;
+
+    std::vector<int32_t> indexes;
+    int cur_axis;
+    size_t index;
+};
 
 void Fill(AlignedArray* out, scalar_t val) {
   /**
@@ -42,8 +81,6 @@ void Fill(AlignedArray* out, scalar_t val) {
     out->ptr[i] = val;
   }
 }
-
-
 
 void Compact(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shape,
              std::vector<int32_t> strides, size_t offset) {
@@ -62,7 +99,12 @@ void Compact(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shap
    *  function will implement here, so we won't repeat this note.)
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  size_t i = 0;
+  AlignedArrayIndex index(shape, strides, offset);
+  while(!index.is_end()) {
+    out->ptr[i++] = a.ptr[index];
+    index.next();
+  }
   /// END SOLUTION
 }
 
@@ -79,7 +121,12 @@ void EwiseSetitem(const AlignedArray& a, AlignedArray* out, std::vector<int32_t>
    *   offset: offset of the *out* array (not a, which has zero offset, being compact)
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  size_t i = 0;
+  AlignedArrayIndex index(shape, strides, offset);
+  while(!index.is_end()) {
+    out->ptr[index] = a.ptr[i++];
+    index.next();
+  }
   /// END SOLUTION
 }
 
@@ -100,7 +147,10 @@ void ScalarSetitem(const size_t size, scalar_t val, AlignedArray* out, std::vect
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  AlignedArrayIndex index(shape, strides, offset);
+  for (size_t i = 0; i < out->size && !index.is_end(); ++i, index.next()) {
+    out->ptr[index] = val;
+  }
   /// END SOLUTION
 }
 
@@ -143,6 +193,73 @@ void ScalarAdd(const AlignedArray& a, scalar_t val, AlignedArray* out) {
  * signatures above.
  */
 
+template <typename Op>
+void BiScalarOp(const AlignedArray& a, scalar_t val, AlignedArray* out, Op op) {
+  assert(a.size == out->size && "size of a and out is not equal");
+  for (size_t i = 0; i < a.size; ++i) {
+    out->ptr[i] = op(a.ptr[i], val);
+  }
+}
+template <typename Op>
+void BiEWiseOp(const AlignedArray& a, const AlignedArray& b, AlignedArray* out, Op op) {
+  assert(a.size == b.size && "size of a and b is not equal");
+  assert(a.size == out->size && "size of a and out is not equal");
+  size_t size = out->size;
+  for (size_t i = 0; i < size; ++i) {
+    out->ptr[i] = op(a.ptr[i], b.ptr[i]);
+  }
+}
+template <typename Op>
+void UniEWiseOp(const AlignedArray& a, AlignedArray* out, Op op) {
+  assert(a.size == out->size && "size of a and out is not equal");
+  size_t size = out->size;
+  for (size_t i = 0; i < size; ++i) {
+    out->ptr[i] = op(a.ptr[i]);
+  }
+}
+void ScalarMul(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, std::multiplies<scalar_t>());
+}
+void EwiseMul(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  BiEWiseOp(a, b, out, std::multiplies<scalar_t>());
+}
+void ScalarDiv(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, std::divides<scalar_t>());
+}
+void EwiseDiv(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  BiEWiseOp(a, b, out, std::divides<scalar_t>());
+}
+void ScalarPower(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, [](scalar_t x, scalar_t n) { return std::pow(x, n);});
+}
+void ScalarMaximum(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, [](scalar_t x, scalar_t y) { return std::max(x, y);});
+}
+void EwiseMaximum(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  BiEWiseOp(a, b, out, [](scalar_t x, scalar_t y) { return std::max(x, y);});
+}
+void ScalarEq(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, std::equal_to<scalar_t>());
+}
+void EwiseEq(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  BiEWiseOp(a, b, out, std::equal_to<scalar_t>());
+}
+void ScalarGe(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  BiScalarOp(a, val, out, std::greater_equal<scalar_t>());
+}
+void EwiseGe(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  BiEWiseOp(a, b, out, std::greater_equal<scalar_t>());
+}
+void EwiseLog(const AlignedArray& a, AlignedArray* out) {
+  UniEWiseOp(a, out, [](scalar_t x) {return std::log(x);});
+}
+void EwiseExp(const AlignedArray& a, AlignedArray* out) {
+  UniEWiseOp(a, out, [](scalar_t x) {return std::exp(x);});
+}
+void EwiseTanh(const AlignedArray& a, AlignedArray* out) {
+  UniEWiseOp(a, out, [](scalar_t x) {return std::tanh(x);});
+}
+
 
 void Matmul(const AlignedArray& a, const AlignedArray& b, AlignedArray* out, uint32_t m, uint32_t n,
             uint32_t p) {
@@ -160,7 +277,15 @@ void Matmul(const AlignedArray& a, const AlignedArray& b, AlignedArray* out, uin
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  for (size_t i = 0; i < m; ++i) {
+    for (size_t j = 0; j < p; ++j) {
+      size_t cur = i * p + j;
+      out->ptr[cur] = 0;
+      for (size_t k = 0; k < n; ++k) {
+        out->ptr[cur] += a.ptr[i * n + k] * b.ptr[k * p + j];
+      }
+    }
+  }
   /// END SOLUTION
 }
 
@@ -190,7 +315,14 @@ inline void AlignedDot(const float* __restrict__ a,
   out = (float*)__builtin_assume_aligned(out, TILE * ELEM_SIZE);
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  for (size_t i = 0; i < TILE; ++i) {
+      for (size_t j = 0; j < TILE; ++j) {
+        size_t cur = i * TILE + j;
+        for (size_t k = 0; k < TILE; ++k) {
+          out[cur] += a[i * TILE + k] * b[k * TILE + j];
+        }
+      }
+  }
   /// END SOLUTION
 }
 
@@ -216,7 +348,21 @@ void MatmulTiled(const AlignedArray& a, const AlignedArray& b, AlignedArray* out
    *
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  for (size_t i = 0; i < out->size; ++i) {
+    out->ptr[i] = 0;
+  }
+  // calc
+  for (size_t i = 0; i < m / TILE; ++i) {
+    for (size_t j = 0; j < p / TILE; ++j) {
+      for (size_t k = 0; k < n / TILE; ++k) {
+        AlignedDot(
+          a.ptr + i * n * TILE + k * TILE * TILE,
+          b.ptr + k * p * TILE + j * TILE * TILE,
+          out->ptr + i * p * TILE + j * TILE * TILE
+        );
+      }
+    }
+  }
   /// END SOLUTION
 }
 
@@ -231,7 +377,15 @@ void ReduceMax(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  assert(a.size == out->size * reduce_size && "size of a with recude_size and out is not equal");
+  size_t total_size = a.size;
+  size_t after_reduce_size = out->size;
+  for (size_t i = 0; i < after_reduce_size; ++i) {
+    out->ptr[i] = a.ptr[i * reduce_size];
+    for (size_t j = 0; j < reduce_size; ++j) {
+      out->ptr[i] = std::max(out->ptr[i], a.ptr[i * reduce_size + j]);
+    }
+  }
   /// END SOLUTION
 }
 
@@ -246,7 +400,15 @@ void ReduceSum(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  assert(a.size == out->size * reduce_size && "size of a with recude_size and out is not equal");
+  size_t total_size = a.size;
+  size_t after_reduce_size = out->size;
+  for (size_t i = 0; i < after_reduce_size; ++i) {
+    out->ptr[i] = 0;
+    for (size_t j = 0; j < reduce_size; ++j) {
+      out->ptr[i] += a.ptr[i * reduce_size + j];
+    }
+  }
   /// END SOLUTION
 }
 
